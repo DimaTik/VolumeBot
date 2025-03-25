@@ -9,10 +9,37 @@ class Bingx:
 		self.api = api
 		self.secret_key = secret_key
 		self.api_url = "https://open-api-vst.bingx.com"
-		self.tokens = ("XRP-USDT","SOL-USDT", "ADA-USDT", "TRX-USDT", "LINK-USDT",
-						"AVAX-USDT", "XLM-USDT", "TON-USDT", "LTC-USDT", "DOT-USDT")
 		self.total_volume = 0
 		self.total_cost = 0
+		self.work = True
+
+	def work_off(self):
+		self.work = False
+
+	def get_flag_work(self):
+		return self.work
+
+	def calculation_cost(self, cost_from_trade):
+		self.total_cost += cost_from_trade
+
+	def calculation_volume(self, volume_from_trade):
+		self.total_volume += volume_from_trade
+
+	def get_total_volume(self):
+		return self.total_volume
+
+	def get_total_cost(self):
+		return self.total_cost
+
+	def set_position_mode(self):
+		payload = {}
+		path = '/openApi/swap/v1/positionSide/dual'
+		method = "POST"
+		paramsMap = {
+			"dualSidePosition": "true"
+		}
+		paramsStr = self._parseParam(paramsMap)
+		return self._send_request(method, path, paramsStr, payload)
 
 	def __get_sign(self, api_secret, method, payload):
 		signature = hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"),
@@ -68,6 +95,7 @@ class Analysis(Bingx):
 		}
 		paramsStr = self._parseParam(paramsMap)
 		response = self._send_request(method, path, paramsStr, payload)
+		print(response.json())
 		return float(response.json()['data']['price'])
 
 	def _get_take_profit(self, direction, entry_price):
@@ -81,12 +109,6 @@ class Analysis(Bingx):
 			return entry_price * 0.9995
 		else:
 			return entry_price * 1.0005
-
-	def _calculation_cost(self, cost_from_trade):
-		self.total_cost += cost_from_trade
-
-	def _calculation_volume(self, volume_from_trade):
-		self.total_volume += volume_from_trade
 
 	def _get_open_position(self, token):
 		check = False
@@ -115,12 +137,12 @@ class Analysis(Bingx):
 
 
 class Trader(Analysis):
-	def __init__(self, token, api, secret_key):
+	def __init__(self, object, token, api, secret_key):
 		super().__init__(api, secret_key)
 		self.token = token
+		self.object = object
 
 	def make_order(self, volume_in_usdt):
-		print(self._get_server_time())
 		check, check1 = False, False
 		payload = {}
 		path = '/openApi/swap/v2/trade/order'
@@ -168,8 +190,9 @@ class Trader(Analysis):
 					check1 = True
 				elif len(ordersId) == 1:
 					self._cancel_order(ordersId[0])
+					time.sleep(2)
 				else:
-					time.sleep(1)
+					time.sleep(3)
 
 				if check:
 					break
@@ -177,13 +200,12 @@ class Trader(Analysis):
 			if check1 is False:
 				time.sleep(10)
 
-		self._calculation_volume(price * volume_in_coin * 4)
-		return ordersId
+		return ordersId, price, volume_in_coin
 
 	def wait_close_position(self):
 		while True:
 			positions = self._get_open_position(self.token).json()
-			# print('wait_close_position', positions)
+			print('wait_close_position', positions)
 			if positions['code'] == 0:
 				types_of_positions = [positions['data']['orders'][i]['type']
 									  for i in range(len(positions['data']['orders']))]
@@ -191,9 +213,9 @@ class Trader(Analysis):
 				if (not(positions['data']['orders'])) or \
 						((len(types_of_positions) == 1) and (types_of_positions[0] == 'LIMIT')):
 					break
-			time.sleep(1)
+			time.sleep(2)
 
-	def cancel_pending_order(self, orderId):
+	def cancel_pending_order(self, orderId, quantity_trades):
 		payload = {}
 		path = '/openApi/swap/v2/trade/openOrder'
 		method = "GET"
@@ -205,11 +227,22 @@ class Trader(Analysis):
 		}
 		paramsStr = self._parseParam(paramsMap)
 		response_pending_order = self._send_request(method, path, paramsStr, payload).json()
-		response_open_order = self._get_open_position(self.token).json()
 		# print('response_pending_order', response_pending_order)
-		# print('response_open_order', response_open_order)
 		if response_pending_order['code'] == 0:
 			self._cancel_order(orderId)
+		else:
+			quantity_trades += 2
+		return quantity_trades
+
+	def cancel_all_orders(self):
+		payload = {}
+		path = '/openApi/swap/v2/trade/closeAllPositions'
+		method = "POST"
+		paramsMap = {
+			"symbol": "BTC-USDT"
+		}
+		paramsStr = self._parseParam(paramsMap)
+		return self._send_request(method, path, paramsStr, payload)
 
 	def _cancel_order(self, orderID):
 		payload = {}
@@ -238,13 +271,3 @@ class Trader(Analysis):
 			paramsStr = self._parseParam(paramsMap)
 			data.append(self._send_request(method, path, paramsStr, payload))
 		return data
-
-	def set_position_mode(self):
-		payload = {}
-		path = '/openApi/swap/v1/positionSide/dual'
-		method = "POST"
-		paramsMap = {
-			"dualSidePosition": "true"
-		}
-		paramsStr = self._parseParam(paramsMap)
-		return self._send_request(method, path, paramsStr, payload)
